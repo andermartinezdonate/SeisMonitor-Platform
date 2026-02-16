@@ -602,8 +602,7 @@ with tab_depth:
                             [0.6, "#1a9850"], [1, "#313695"]],
                 cmin=0, cmax=100,
                 colorbar=dict(
-                    title="Depth (km)",
-                    titlefont=dict(color="#8b949e", size=10),
+                    title=dict(text="Depth (km)", font=dict(color="#8b949e", size=10)),
                     tickfont=dict(color="#8b949e", size=9),
                     len=0.8, thickness=10,
                 ),
