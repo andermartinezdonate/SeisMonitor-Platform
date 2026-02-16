@@ -486,7 +486,7 @@ with col_map:
         <div class="depth-legend">
             <span>0 km</span>
             <div class="bar" style="background: linear-gradient(90deg, #d73027, #f46d43, #fdae61, #fee08b, #d9ef8b, #91cf60, #1a9850, #313695);"></div>
-            <span>700 km</span>
+            <span>100 km</span>
             <span style="margin-left: 8px;">(Shallow → Deep)</span>
         </div>
         """, unsafe_allow_html=True)
@@ -674,7 +674,7 @@ with tab_depth:
                 color=df["depth"],
                 colorscale=[[0, "#d73027"], [0.15, "#fdae61"], [0.35, "#d9ef8b"],
                             [0.6, "#1a9850"], [1, "#313695"]],
-                cmin=0, cmax=700,
+                cmin=0, cmax=100,
                 colorbar=dict(
                     title="Depth (km)",
                     titlefont=dict(color="#8b949e", size=10),
