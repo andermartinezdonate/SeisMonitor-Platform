@@ -73,19 +73,22 @@ gcloud iam service-accounts create quake-scheduler \
 # ── 6. Deploy per-source ingester services ───────────────────────────────
 echo "--- Deploying per-source ingester services ---"
 
-# Source: name, scheduler interval (cron), memory
-declare -A SOURCE_SCHEDULE
-SOURCE_SCHEDULE[usgs]="*/1 * * * *"     # every 1 minute
-SOURCE_SCHEDULE[emsc]="*/2 * * * *"     # every 2 minutes
-SOURCE_SCHEDULE[gfz]="*/3 * * * *"      # every 3 minutes
-SOURCE_SCHEDULE[isc]="*/5 * * * *"      # every 5 minutes
-SOURCE_SCHEDULE[ipgp]="*/3 * * * *"     # every 3 minutes
+# Source schedule lookup (compatible with bash 3.x / macOS)
+get_schedule() {
+    case "$1" in
+        usgs) echo "*/1 * * * *" ;;   # every 1 minute
+        emsc) echo "*/2 * * * *" ;;   # every 2 minutes
+        gfz)  echo "*/3 * * * *" ;;   # every 3 minutes
+        isc)  echo "*/5 * * * *" ;;   # every 5 minutes
+        ipgp) echo "*/3 * * * *" ;;   # every 3 minutes
+    esac
+}
 
-SOURCES=("usgs" "emsc" "gfz" "isc" "ipgp")
+SOURCES="usgs emsc gfz isc ipgp"
 
-for SOURCE in "${SOURCES[@]}"; do
+for SOURCE in $SOURCES; do
     SERVICE_NAME="ingest-${SOURCE}"
-    SCHEDULE="${SOURCE_SCHEDULE[$SOURCE]}"
+    SCHEDULE="$(get_schedule "$SOURCE")"
 
     echo ""
     echo "--- Deploying $SERVICE_NAME ---"
@@ -247,7 +250,7 @@ echo "  Dashboard:  $DASHBOARD_URL"
 echo "  Dedup:      $DEDUP_URL"
 echo ""
 echo "  Per-source ingesters:"
-for SOURCE in "${SOURCES[@]}"; do
+for SOURCE in $SOURCES; do
     echo "    ingest-${SOURCE}"
 done
 echo ""
