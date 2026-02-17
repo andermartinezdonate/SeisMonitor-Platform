@@ -70,9 +70,11 @@ class FDSNClient:
         if end_time is None:
             end_time = datetime.now(timezone.utc)
 
-        # FDSN standard uses "text" or "json". USGS also accepts "geojson".
+        # FDSN standard uses "text", "json", or "xml". USGS also accepts "geojson".
         if self.config.format == "fdsn_text":
             fmt = "text"
+        elif self.config.format == "quakeml":
+            fmt = "xml"
         elif self.config.name == "usgs":
             fmt = "geojson"
         else:
@@ -101,6 +103,11 @@ class FDSNClient:
                     # Return empty structure based on format
                     if self.config.format == "fdsn_text":
                         return ""
+                    if self.config.format == "quakeml":
+                        return ('<?xml version="1.0" encoding="UTF-8"?>'
+                                '<q:quakeml xmlns:q="http://quakeml.org/xmlns/quakeml/1.2"'
+                                ' xmlns="http://quakeml.org/xmlns/bed/1.2">'
+                                '<eventParameters></eventParameters></q:quakeml>')
                     return '{"type":"FeatureCollection","features":[]}'
                 resp.raise_for_status()
                 return resp.text

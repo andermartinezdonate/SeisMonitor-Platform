@@ -17,10 +17,9 @@ from quake_stream.db import get_connection
 from quake_stream.models_v2 import RawEventEnvelope, NormalizedEvent
 from quake_stream.parsers import PARSER_MAP
 from quake_stream.parsers.base import EventParser
+from quake_stream.sources import SOURCES
 
 logger = logging.getLogger(__name__)
-
-RAW_TOPIC = "raw_earthquakes"
 
 
 def _insert_raw_event(cur, source: str, source_event_id: str, raw_payload: str, fetched_at):
@@ -106,9 +105,11 @@ def run_normalizer(
         "enable.auto.commit": True,
     }
     consumer = Consumer(conf)
-    consumer.subscribe([RAW_TOPIC])
+    # Subscribe to per-source topics for all enabled sources
+    topics = [f"raw_{name}" for name, cfg in SOURCES.items() if cfg.enabled]
+    consumer.subscribe(topics)
 
-    click.echo(f"Normalizer started — consuming from '{RAW_TOPIC}' (group={group_id})")
+    click.echo(f"Normalizer started — consuming from {topics} (group={group_id})")
 
     total_processed = 0
     total_normalized = 0

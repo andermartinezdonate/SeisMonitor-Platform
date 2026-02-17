@@ -22,8 +22,12 @@ from quake_stream.sources import SOURCES, SourceConfig
 
 logger = logging.getLogger(__name__)
 
-RAW_TOPIC = "raw_earthquakes"
 LEGACY_TOPIC = "earthquakes"
+
+
+def _raw_topic(source_name: str) -> str:
+    """Per-source Kafka topic: raw_{source}."""
+    return f"raw_{source_name}"
 
 
 def _delivery_report(err, msg):
@@ -103,9 +107,9 @@ class MultiSourceProducer:
                 fetched_at=fetched_at,
             )
 
-            # Produce to raw_earthquakes topic
+            # Produce to per-source topic (raw_{source})
             self._producer.produce(
-                RAW_TOPIC,
+                _raw_topic(config.name),
                 key=envelope.key,
                 value=envelope.to_json(),
                 callback=_delivery_report,

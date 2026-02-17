@@ -54,7 +54,40 @@ SOURCES: dict[str, SourceConfig] = {
         format="fdsn_text",
         enabled=True,
     ),
+    "isc": SourceConfig(
+        name="isc",
+        base_url="http://www.isc.ac.uk/fdsnws/event/1/query",
+        poll_interval_seconds=300,
+        max_retries=3,
+        retry_backoff_base=2.0,
+        rate_limit_rpm=10,
+        timeout_seconds=30,
+        format="quakeml",
+        enabled=True,
+    ),
+    "ipgp": SourceConfig(
+        name="ipgp",
+        base_url="http://ws.ipgp.fr/fdsnws/event/1/query",
+        poll_interval_seconds=180,
+        max_retries=3,
+        retry_backoff_base=2.0,
+        rate_limit_rpm=15,
+        timeout_seconds=20,
+        format="quakeml",
+        enabled=True,
+    ),
+    "geonet": SourceConfig(
+        name="geonet",
+        base_url="https://service.geonet.org.nz/fdsnws/event/1/query",
+        poll_interval_seconds=180,
+        max_retries=3,
+        retry_backoff_base=2.0,
+        rate_limit_rpm=15,
+        timeout_seconds=20,
+        format="quakeml",
+        enabled=True,
+    ),
 }
 
 # Source priority for unified event selection (lower index = higher priority)
-SOURCE_PRIORITY = ["usgs", "emsc", "gfz"]
+SOURCE_PRIORITY = ["usgs", "emsc", "gfz", "isc", "ipgp", "geonet"]

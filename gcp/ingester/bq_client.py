@@ -70,6 +70,7 @@ def insert_raw_events(events) -> int:
             "fetched_at": e.fetched_at.isoformat(),
             "ingested_at": now,
             "raw_payload": (e.raw_payload or "")[:10000],
+            "evaluation_mode": getattr(e, "status", None),
         })
 
     errors = client.insert_rows_json(table_ref, rows)
@@ -108,6 +109,9 @@ def merge_unified_events(unified_rows: list[dict]) -> int:
             '{r["status"]}' AS status,
             {r["num_sources"]} AS num_sources, '{r["preferred_source"]}' AS preferred_source,
             [{uids_array}] AS source_event_uids,
+            {r.get("magnitude_std", 0.0)} AS magnitude_std,
+            {r.get("location_spread_km", 0.0)} AS location_spread_km,
+            {r.get("source_agreement_score", 0.0)} AS source_agreement_score,
             TIMESTAMP('{r["created_at"]}') AS created_at,
             TIMESTAMP('{r["updated_at"]}') AS updated_at""")
 
@@ -132,6 +136,9 @@ def merge_unified_events(unified_rows: list[dict]) -> int:
         num_sources = S.num_sources,
         preferred_source = S.preferred_source,
         source_event_uids = S.source_event_uids,
+        magnitude_std = S.magnitude_std,
+        location_spread_km = S.location_spread_km,
+        source_agreement_score = S.source_agreement_score,
         updated_at = S.updated_at
     WHEN NOT MATCHED THEN INSERT ROW
     """
@@ -236,6 +243,7 @@ def log_pipeline_run(
     run_id: str, started_at: datetime, status: str,
     sources: list[str], raw_count: int, unified_count: int,
     dead_count: int, error_msg: str | None, duration: float,
+    source_name: str | None = None,
 ) -> None:
     """Log pipeline execution metadata."""
     client = _get_client()
@@ -252,11 +260,52 @@ def log_pipeline_run(
         "dead_letter_count": dead_count,
         "error_message": error_msg,
         "duration_seconds": round(duration, 3),
+        "source_name": source_name,
     }
 
     errors = client.insert_rows_json(table_ref, [row])
     if errors:
         logger.error("Pipeline run log error: %s", errors)
+
+
+# ── Source health ────────────────────────────────────────────────────
+
+
+def check_source_health(hours: int = 1) -> dict:
+    """Query pipeline_runs to get per-source health status.
+
+    Returns dict keyed by source_name with:
+        runs, ok_count, failed_count, last_run, avg_duration
+    """
+    client = _get_client()
+    project = client.project
+
+    query = f"""
+        SELECT
+            source_name,
+            COUNT(*) AS runs,
+            COUNTIF(status = 'ok') AS ok_count,
+            COUNTIF(status = 'failed') AS failed_count,
+            MAX(started_at) AS last_run,
+            AVG(duration_seconds) AS avg_duration
+        FROM `{project}.{DATASET}.pipeline_runs`
+        WHERE started_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {hours} HOUR)
+          AND source_name IS NOT NULL
+        GROUP BY source_name
+        ORDER BY source_name
+    """
+
+    rows = list(client.query(query).result())
+    result = {}
+    for row in rows:
+        result[row.source_name] = {
+            "runs": row.runs,
+            "ok_count": row.ok_count,
+            "failed_count": row.failed_count,
+            "last_run": row.last_run.isoformat() if row.last_run else None,
+            "avg_duration": round(row.avg_duration, 2) if row.avg_duration else 0,
+        }
+    return result
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

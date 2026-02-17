@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "seismonitor-platform"
-version = "0.2.0"
+version = "0.3.0"
 description = "Multi-source earthquake monitoring platform — USGS, EMSC, GFZ ingestion with deduplication, Kafka or GCP serverless"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "confluent-kafka>=2.3.0",
     "click>=8.1.0",
@@ -18,6 +18,8 @@ dependencies = [
     "pydeck>=0.8.0",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.11.0",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,9 @@
-"""Cloud Run entrypoint — HTTP handler for scheduled earthquake ingestion."""
+"""Cloud Run entrypoint — HTTP handler for scheduled earthquake ingestion.
+
+Supports two modes:
+- Per-source: Set SOURCE_NAME env var to run a single-source pipeline (new architecture)
+- All-sources: Legacy mode, fetches all sources and deduplicates (deprecated)
+"""
 
 from __future__ import annotations
 
@@ -8,21 +13,29 @@ import os
 
 from flask import Flask, jsonify, request
 
-from pipeline import run_pipeline
-
 app = Flask(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-)
+
+from quake_stream.logging_config import configure_logging
+configure_logging()
+
 logger = logging.getLogger(__name__)
+
+# Per-source mode: set by deploy.sh per Cloud Run service
+SOURCE_NAME = os.environ.get("SOURCE_NAME", "")
 
 
 @app.route("/ingest", methods=["POST"])
 def ingest():
-    """Triggered by Cloud Scheduler every minute."""
+    """Triggered by Cloud Scheduler."""
     try:
-        result = asyncio.run(run_pipeline())
+        if SOURCE_NAME:
+            # Per-source mode (new architecture)
+            from source_pipeline import run_source_pipeline
+            result = asyncio.run(run_source_pipeline(SOURCE_NAME))
+        else:
+            # Legacy all-sources mode (deprecated)
+            from pipeline import run_pipeline
+            result = asyncio.run(run_pipeline())
         logger.info("Pipeline OK: %s", result)
         return jsonify(result), 200
     except Exception as exc:
@@ -32,12 +45,20 @@ def ingest():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"}), 200
+    from datetime import datetime, timezone
+    return jsonify({
+        "status": "ok",
+        "source": SOURCE_NAME or "all",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }), 200
 
 
 @app.route("/", methods=["GET"])
 def root():
-    return jsonify({"service": "quake-ingester", "status": "running"}), 200
+    return jsonify({
+        "service": f"quake-ingest-{SOURCE_NAME}" if SOURCE_NAME else "quake-ingester",
+        "status": "running",
+    }), 200
 
 
 if __name__ == "__main__":

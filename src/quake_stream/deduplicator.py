@@ -2,18 +2,22 @@
 
 Runs every N minutes, queries normalized_events, clusters events that represent
 the same physical earthquake, and writes unified_events + event_crosswalk.
+
+Uses DBSCAN for spatial clustering with haversine metric, then sub-clusters
+by time and magnitude to separate aftershocks at the same location.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from quake_stream.geo import haversine_km
-from quake_stream.sources import SOURCE_PRIORITY
+from quake_stream.region_priority import get_source_priority
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +56,7 @@ class Cluster:
 
 
 def compute_match_score(a: EventRecord, b: EventRecord) -> float:
-    """Compute similarity score between two events (0 → 1)."""
+    """Compute similarity score between two events (0 -> 1)."""
     dt = abs((a.origin_time_utc - b.origin_time_utc).total_seconds())
     if dt > MAX_TIME_DIFF_SEC:
         return 0.0
@@ -74,11 +78,89 @@ def compute_match_score(a: EventRecord, b: EventRecord) -> float:
 
 
 def cluster_events(events: list[EventRecord]) -> list[Cluster]:
-    """Greedy chronological clustering.
+    """DBSCAN-based clustering with haversine metric.
+
+    1. Build numpy array of [lat_rad, lon_rad]
+    2. Run DBSCAN(eps=100km in radians, min_samples=1, metric='haversine')
+    3. Group by spatial cluster label
+    4. Sub-cluster within each spatial group by time (30s) and magnitude (0.5)
+    """
+    if not events:
+        return []
+
+    # Lazy import to avoid making sklearn a hard dependency for ingester images
+    try:
+        import numpy as np
+        from sklearn.cluster import DBSCAN
+    except ImportError:
+        logger.warning("scikit-learn not available, falling back to greedy clustering")
+        return _cluster_events_greedy(events)
+
+    events_sorted = sorted(events, key=lambda e: e.origin_time_utc)
+
+    # Build coordinate array in radians for haversine metric
+    coords = np.array([
+        [math.radians(e.latitude), math.radians(e.longitude)]
+        for e in events_sorted
+    ])
+
+    # DBSCAN: eps = 100km / Earth radius in radians
+    eps_rad = MAX_DISTANCE_KM / 6371.0
+    db = DBSCAN(eps=eps_rad, min_samples=1, metric="haversine")
+    spatial_labels = db.fit_predict(coords)
+
+    # Group by spatial cluster
+    spatial_groups: dict[int, list[EventRecord]] = {}
+    for label, event in zip(spatial_labels, events_sorted):
+        spatial_groups.setdefault(label, []).append(event)
+
+    # Sub-cluster within each spatial group by time and magnitude
+    clusters: list[Cluster] = []
+    for members in spatial_groups.values():
+        sub_clusters = _sub_cluster_time_mag(members)
+        clusters.extend(sub_clusters)
+
+    return clusters
+
+
+def _sub_cluster_time_mag(events: list[EventRecord]) -> list[Cluster]:
+    """Sub-cluster spatially co-located events by time and magnitude.
+
+    Handles aftershocks at the same location that should be separate clusters.
+    Uses greedy chronological assignment within the spatial group.
+    """
+    events_sorted = sorted(events, key=lambda e: e.origin_time_utc)
+    clusters: list[Cluster] = []
+
+    for event in events_sorted:
+        best_cluster: Cluster | None = None
+        best_score = 0.0
+
+        for cluster in clusters:
+            anchor = cluster.anchor
+            dt = abs((event.origin_time_utc - anchor.origin_time_utc).total_seconds())
+            dmag = abs(event.magnitude_value - anchor.magnitude_value)
+
+            if dt <= MAX_TIME_DIFF_SEC and dmag <= MAX_MAG_DIFF:
+                score = compute_match_score(event, anchor)
+                if score >= MATCH_SCORE_THRESHOLD and score > best_score:
+                    best_cluster = cluster
+                    best_score = score
+
+        if best_cluster is not None:
+            best_cluster.members.append(event)
+            best_cluster.best_score = max(best_cluster.best_score, best_score)
+        else:
+            clusters.append(Cluster(members=[event]))
+
+    return clusters
+
+
+def _cluster_events_greedy(events: list[EventRecord]) -> list[Cluster]:
+    """Greedy chronological clustering (fallback when sklearn unavailable).
 
     Each event either joins the best-scoring existing cluster or starts a new one.
     """
-    # Sort by time
     events_sorted = sorted(events, key=lambda e: e.origin_time_utc)
     clusters: list[Cluster] = []
 
@@ -104,16 +186,21 @@ def cluster_events(events: list[EventRecord]) -> list[Cluster]:
 def _select_preferred(cluster: Cluster) -> EventRecord:
     """Select the preferred event from a cluster.
 
-    Priority: reviewed > automatic. Among same status, use source priority.
+    Priority: reviewed > automatic. Among same status, use region-aware source priority.
     """
     reviewed = [m for m in cluster.members if m.status == "reviewed"]
     candidates = reviewed if reviewed else cluster.members
 
+    # Use region-aware priority based on cluster centroid
+    avg_lat = sum(m.latitude for m in cluster.members) / len(cluster.members)
+    avg_lon = sum(m.longitude for m in cluster.members) / len(cluster.members)
+    priority = get_source_priority(avg_lat, avg_lon)
+
     def source_rank(e: EventRecord) -> int:
         try:
-            return SOURCE_PRIORITY.index(e.source)
+            return priority.index(e.source)
         except ValueError:
-            return len(SOURCE_PRIORITY)
+            return len(priority)
 
     return min(candidates, key=source_rank)
 
@@ -126,16 +213,20 @@ def _compute_unified_id(cluster: Cluster) -> str:
 
 
 def _weighted_mean(cluster: Cluster) -> tuple[float, float, float]:
-    """Compute weighted mean lat/lon/depth. Source priority = weight."""
+    """Compute weighted mean lat/lon/depth. Region-aware source priority = weight."""
+    avg_lat = sum(m.latitude for m in cluster.members) / len(cluster.members)
+    avg_lon = sum(m.longitude for m in cluster.members) / len(cluster.members)
+    priority = get_source_priority(avg_lat, avg_lon)
+
     total_weight = 0.0
     lat_sum = lon_sum = depth_sum = 0.0
 
     for member in cluster.members:
         try:
-            rank = SOURCE_PRIORITY.index(member.source)
+            rank = priority.index(member.source)
         except ValueError:
-            rank = len(SOURCE_PRIORITY)
-        weight = max(1.0, len(SOURCE_PRIORITY) - rank)
+            rank = len(priority)
+        weight = max(1.0, len(priority) - rank)
 
         lat_sum += member.latitude * weight
         lon_sum += member.longitude * weight
@@ -147,6 +238,46 @@ def _weighted_mean(cluster: Cluster) -> tuple[float, float, float]:
         return m.latitude, m.longitude, m.depth_km
 
     return lat_sum / total_weight, lon_sum / total_weight, depth_sum / total_weight
+
+
+def _compute_quality_metrics(cluster: Cluster) -> dict:
+    """Compute quality metrics for a cluster.
+
+    Returns:
+        magnitude_std: Standard deviation of magnitudes across sources.
+        location_spread_km: Maximum pairwise haversine distance in cluster.
+        source_agreement_score: Fraction of unique sources vs total members.
+    """
+    members = cluster.members
+
+    # Magnitude std
+    if len(members) > 1:
+        mags = [m.magnitude_value for m in members]
+        mean_mag = sum(mags) / len(mags)
+        variance = sum((m - mean_mag) ** 2 for m in mags) / len(mags)
+        magnitude_std = variance ** 0.5
+    else:
+        magnitude_std = 0.0
+
+    # Location spread: max pairwise distance
+    location_spread_km = 0.0
+    for i in range(len(members)):
+        for j in range(i + 1, len(members)):
+            dist = haversine_km(
+                members[i].latitude, members[i].longitude,
+                members[j].latitude, members[j].longitude,
+            )
+            location_spread_km = max(location_spread_km, dist)
+
+    # Source agreement
+    unique_sources = len(set(m.source for m in members))
+    source_agreement_score = unique_sources / len(members) if members else 0.0
+
+    return {
+        "magnitude_std": round(magnitude_std, 4),
+        "location_spread_km": round(location_spread_km, 2),
+        "source_agreement_score": round(source_agreement_score, 4),
+    }
 
 
 def run_deduplicator(
@@ -208,14 +339,17 @@ def _run_dedup_cycle(lookback_hours: int) -> None:
             preferred = _select_preferred(cluster)
             unified_id = _compute_unified_id(cluster)
             lat, lon, depth = _weighted_mean(cluster)
+            metrics = _compute_quality_metrics(cluster)
 
             # Upsert unified event
             cur.execute("""
                 INSERT INTO unified_events (
                     unified_event_id, origin_time_utc, latitude, longitude, depth_km,
                     magnitude_value, magnitude_type, place, region, status,
-                    num_sources, preferred_source, preferred_event_uid, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    num_sources, preferred_source, preferred_event_uid,
+                    magnitude_std, location_spread_km, source_agreement_score,
+                    updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (unified_event_id) DO UPDATE SET
                     origin_time_utc = EXCLUDED.origin_time_utc,
                     latitude = EXCLUDED.latitude,
@@ -229,6 +363,9 @@ def _run_dedup_cycle(lookback_hours: int) -> None:
                     num_sources = EXCLUDED.num_sources,
                     preferred_source = EXCLUDED.preferred_source,
                     preferred_event_uid = EXCLUDED.preferred_event_uid,
+                    magnitude_std = EXCLUDED.magnitude_std,
+                    location_spread_km = EXCLUDED.location_spread_km,
+                    source_agreement_score = EXCLUDED.source_agreement_score,
                     updated_at = NOW()
             """, (
                 unified_id, preferred.origin_time_utc, lat, lon, depth,
@@ -236,6 +373,9 @@ def _run_dedup_cycle(lookback_hours: int) -> None:
                 preferred.place, preferred.region, preferred.status,
                 len(set(m.source for m in cluster.members)),
                 preferred.source, preferred.event_uid,
+                metrics["magnitude_std"],
+                metrics["location_spread_km"],
+                metrics["source_agreement_score"],
             ))
 
             # Upsert crosswalk entries
@@ -255,6 +395,6 @@ def _run_dedup_cycle(lookback_hours: int) -> None:
 
     multi_source = sum(1 for c in clusters if len(set(m.source for m in c.members)) > 1)
     click.echo(
-        f"Dedup cycle: {len(events)} events → {len(clusters)} clusters "
+        f"Dedup cycle: {len(events)} events -> {len(clusters)} clusters "
         f"({multi_source} multi-source)"
     )

@@ -24,6 +24,7 @@ from quake_stream.deduplicator import (
     _select_preferred,
     _compute_unified_id,
     _weighted_mean,
+    _compute_quality_metrics,
 )
 from quake_stream.sources import SOURCES
 
@@ -38,7 +39,14 @@ from bq_client import (
 logger = logging.getLogger(__name__)
 
 # FDSN format parameter per source
-FORMAT_MAP = {"usgs": "geojson", "emsc": "json", "gfz": "text"}
+FORMAT_MAP = {
+    "usgs": "geojson",
+    "emsc": "json",
+    "gfz": "text",
+    "isc": "xml",
+    "ipgp": "xml",
+    "geonet": "xml",
+}
 
 # Lookback window — 10 min overlap ensures no missed events between 1-min triggers
 LOOKBACK_MINUTES = 10
@@ -201,6 +209,7 @@ async def run_pipeline() -> dict:
         preferred = _select_preferred(cluster)
         unified_id = _compute_unified_id(cluster)
         lat, lon, depth = _weighted_mean(cluster)
+        metrics = _compute_quality_metrics(cluster)
 
         unified_rows.append({
             "unified_event_id": unified_id,
@@ -216,6 +225,9 @@ async def run_pipeline() -> dict:
             "num_sources": len(set(m.source for m in cluster.members)),
             "preferred_source": preferred.source,
             "source_event_uids": [m.event_uid for m in cluster.members],
+            "magnitude_std": metrics["magnitude_std"],
+            "location_spread_km": metrics["location_spread_km"],
+            "source_agreement_score": metrics["source_agreement_score"],
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
         })

@@ -83,6 +83,10 @@ class UnifiedEvent:
     preferred_source: str = ""
     preferred_event_uid: str = ""
 
+    magnitude_std: float = 0.0
+    location_spread_km: float = 0.0
+    source_agreement_score: float = 0.0
+
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
 
@@ -108,7 +112,7 @@ class RawEventEnvelope:
 
     source: str
     source_event_id: str
-    format: str                 # "geojson" or "fdsn_text"
+    format: str                 # "geojson", "fdsn_text", or "quakeml"
     raw_payload: str            # Original response body (text)
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 

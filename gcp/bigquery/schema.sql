@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS `quake_stream.raw_events` (
     fetched_at          TIMESTAMP NOT NULL,
     ingested_at         TIMESTAMP NOT NULL,
 
-    raw_payload         STRING
+    raw_payload         STRING,
+    evaluation_mode     STRING
 )
 PARTITION BY DATE(origin_time_utc)
 CLUSTER BY source, status
@@ -60,6 +61,10 @@ CREATE TABLE IF NOT EXISTS `quake_stream.unified_events` (
     num_sources         INT64 NOT NULL,
     preferred_source    STRING NOT NULL,
     source_event_uids   ARRAY<STRING>,
+
+    magnitude_std       FLOAT64,
+    location_spread_km  FLOAT64,
+    source_agreement_score FLOAT64,
 
     created_at          TIMESTAMP NOT NULL,
     updated_at          TIMESTAMP NOT NULL
@@ -96,7 +101,8 @@ CREATE TABLE IF NOT EXISTS `quake_stream.pipeline_runs` (
     unified_events_count INT64,
     dead_letter_count   INT64,
     error_message       STRING,
-    duration_seconds    FLOAT64
+    duration_seconds    FLOAT64,
+    source_name         STRING
 )
 PARTITION BY DATE(started_at)
 OPTIONS (

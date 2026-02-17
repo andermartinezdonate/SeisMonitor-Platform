@@ -112,7 +112,10 @@ def init_db_v2():
 @click.option("--broker", default="localhost:9092", help="Kafka bootstrap servers.")
 @click.option("--min-mag", default=0.0, help="Minimum magnitude filter.")
 def multi_produce(broker: str, min_mag: float):
-    """Start the multi-source Kafka producer (polls USGS, EMSC, GFZ)."""
+    """Start the multi-source Kafka producer (polls USGS, EMSC, GFZ, ISC, IPGP, GeoNet).
+
+    Each source publishes to its own topic: raw_usgs, raw_emsc, raw_gfz, etc.
+    """
     from quake_stream.multi_producer import run_multi_producer
     run_multi_producer(bootstrap_servers=broker, min_magnitude=min_mag)
 
@@ -121,7 +124,10 @@ def multi_produce(broker: str, min_mag: float):
 @click.option("--broker", default="localhost:9092", help="Kafka bootstrap servers.")
 @click.option("--group", default="quake-normalizer", help="Consumer group ID.")
 def normalize(broker: str, group: str):
-    """Start the normalizer consumer (raw_earthquakes → normalized_events)."""
+    """Start the normalizer consumer (raw_{source} topics -> normalized_events).
+
+    Subscribes to per-source topics: raw_usgs, raw_emsc, raw_gfz, raw_isc, etc.
+    """
     from quake_stream.normalizer import run_normalizer
     run_normalizer(bootstrap_servers=broker, group_id=group)
 
@@ -130,6 +136,9 @@ def normalize(broker: str, group: str):
 @click.option("--interval", default=300, help="Dedup cycle interval in seconds.")
 @click.option("--lookback", default=6, help="Hours to look back for clustering.")
 def deduplicate(interval: int, lookback: int):
-    """Start the periodic deduplicator (normalized → unified events)."""
+    """Start the periodic deduplicator (normalized -> unified events).
+
+    Uses DBSCAN clustering with haversine metric. Region-aware source priority.
+    """
     from quake_stream.deduplicator import run_deduplicator
     run_deduplicator(interval_seconds=interval, lookback_hours=lookback)
